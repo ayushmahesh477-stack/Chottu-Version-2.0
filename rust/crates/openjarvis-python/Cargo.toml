@@ -1,0 +1,32 @@
+[package]
+name = "Chottu-python"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "Chottu_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+Chottu-core = { path = "../Chottu-core" }
+Chottu-engine = { path = "../Chottu-engine" }
+Chottu-security = { path = "../Chottu-security" }
+Chottu-tools = { path = "../Chottu-tools" }
+Chottu-agents = { path = "../Chottu-agents" }
+Chottu-traces = { path = "../Chottu-traces" }
+Chottu-telemetry = { path = "../Chottu-telemetry" }
+Chottu-learning = { path = "../Chottu-learning" }
+Chottu-mcp = { path = "../Chottu-mcp" }
+Chottu-sessions = { path = "../Chottu-sessions" }
+Chottu-workflow = { path = "../Chottu-workflow" }
+Chottu-skills = { path = "../Chottu-skills" }
+Chottu-recipes = { path = "../Chottu-recipes" }
+Chottu-templates = { path = "../Chottu-templates" }
+Chottu-a2a = { path = "../Chottu-a2a" }
+Chottu-scheduler = { path = "../Chottu-scheduler" }
+pyo3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }

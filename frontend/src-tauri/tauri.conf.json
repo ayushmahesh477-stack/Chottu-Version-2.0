@@ -1,0 +1,71 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Chottu",
+  "version": "2.0.0",
+  "identifier": "com.chottu.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build:tauri"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Chottu AI Assistant",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; img-src 'self' data: blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": false,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "category": "Utility",
+    "shortDescription": "Your personal Chottu AI assistant - private, on-device intelligence",
+    "longDescription": "Chottu is a personal AI assistant created by Ayush. It runs locally on your device, keeping your data private while providing intelligent assistance for daily tasks, research, coding, and more.",
+    "macOS": {
+      "entitlements": "Entitlements.plist",
+      "minimumSystemVersion": "10.15",
+      "exceptionDomain": "",
+      "frameworks": [],
+      "providerShortName": null,
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": false,
+      "pubkey": "",
+      "endpoints": []
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["chottu"]
+      }
+    }
+  }
+}

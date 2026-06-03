@@ -1,0 +1,20 @@
+[Unit]
+Description=Chottu API Server
+After=network.target
+
+[Service]
+Type=simple
+User=Chottu
+WorkingDirectory=/opt/Chottu
+ExecStart=/opt/Chottu/.venv/bin/Chottu serve --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+Environment=HOME=/opt/Chottu
+# Binding 0.0.0.0 requires authentication. This file MUST exist and contain:
+#   Chottu_API_KEY=<key>      (generate one: `Chottu auth generate-key`)
+# It is not prefixed with "-", so the unit fails to start if the file is
+# missing — preventing an accidentally unauthenticated public server.
+EnvironmentFile=/etc/Chottu/env
+
+[Install]
+WantedBy=multi-user.target
