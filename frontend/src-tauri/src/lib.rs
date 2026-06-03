@@ -7,7 +7,7 @@ use tauri_plugin_autostart::MacosLauncher;
 use tokio::sync::Mutex;
 
 const OLLAMA_PORT: u16 = 11434;
-const Chottu_PORT: u16 = 8000;
+const CHOTTU_PORT: u16 = 8000;
 
 /// Small, fast model pulled at startup so the app opens quickly.
 const STARTUP_MODEL: &str = "qwen3.5:4b";
@@ -108,9 +108,9 @@ struct BootPlan {
     model_to_pull: Option<String>,
     /// Optional `(engine_key, bare_host)` override for a custom endpoint,
     /// e.g. `("lmstudio", "http://localhost:1234")`. Written into
-    /// ~/.Chottu/config.toml so `Chottu serve` picks it up.
+    /// ~/.chottu/config.toml so `chottu serve` picks it up.
     engine_host: Option<(String, String)>,
-    /// Args appended after `uv run Chottu serve --port <port>`.
+    /// Args appended after `uv run chottu serve --port <port>`.
     serve_args: Vec<String>,
 }
 
@@ -154,7 +154,7 @@ fn boot_plan(cfg: &InferenceConfig, ram_gb: f64) -> BootPlan {
                 .clone()
                 .filter(|h| !h.is_empty())
                 .map(|h| (engine.clone(), h));
-            // `model` may be empty if the config is malformed; `Chottu serve`
+            // `model` may be empty if the config is malformed; `chottu serve`
             // surfaces a clear error then (there is no universal default model
             // for an arbitrary endpoint).
             let model = cfg.model.clone().unwrap_or_default();
@@ -265,11 +265,11 @@ fn resolve_bin(name: &str) -> String {
 }
 
 /// Find the Chottu project root (contains pyproject.toml).
-/// Checks Chottu_ROOT env var, walks up from the executable, then
+/// Checks CHOTTU_ROOT env var, walks up from the executable, then
 /// probes common clone locations.
 fn find_project_root() -> Option<std::path::PathBuf> {
     // 1. Explicit env var override
-    if let Ok(root) = std::env::var("Chottu_ROOT") {
+    if let Ok(root) = std::env::var("CHOTTU_ROOT") {
         let path = std::path::PathBuf::from(&root);
         if path.join("pyproject.toml").exists() {
             return Some(path);
@@ -367,7 +367,7 @@ impl ChildHandle {
 /// Rolling buffer holding the most recent ~16 KB of Chottu stderr.
 ///
 /// Populated by a background drainer task spawned at boot so the pipe
-/// never fills and back-pressures `Chottu serve`; consumed by the boot
+/// never fills and back-pressures `chottu serve`; consumed by the boot
 /// path when surfacing failure messages.
 type StderrTail = Arc<Mutex<Vec<u8>>>;
 
@@ -375,26 +375,26 @@ const STDERR_TAIL_LIMIT: usize = 16 * 1024;
 
 struct BackendManager {
     ollama: Option<ChildHandle>,
-    Chottu: Option<ChildHandle>,
-    Chottu_stderr_tail: StderrTail,
+    chottu: Option<ChildHandle>,
+    chottu_stderr_tail: StderrTail,
 }
 
 impl Default for BackendManager {
     fn default() -> Self {
         Self {
             ollama: None,
-            Chottu: None,
-            Chottu_stderr_tail: Arc::new(Mutex::new(Vec::new())),
+            chottu: None,
+            chottu_stderr_tail: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
 
 impl BackendManager {
     async fn stop_all(&mut self) {
-        if let Some(ref mut h) = self.Chottu {
+        if let Some(ref mut h) = self.chottu {
             h.kill().await;
         }
-        self.Chottu = None;
+        self.chottu = None;
         if let Some(ref mut h) = self.ollama {
             h.kill().await;
         }
@@ -479,7 +479,7 @@ async fn endpoint_reachable(host: &str, timeout: Duration) -> bool {
     false
 }
 
-/// Outcome of waiting for `Chottu serve` to become healthy.
+/// Outcome of waiting for `chottu serve` to become healthy.
 ///
 /// Unlike [`wait_for_url`] this differentiates "server is up but degraded"
 /// (HTTP 503 — usually inference engine failed to load) from "server never
@@ -492,16 +492,16 @@ enum ChottuStartResult {
     /// Server replied 503. The body is the actionable message (typically
     /// "engine not ready" or a model-load error).
     ServiceUnavailable(String),
-    /// The `Chottu serve` child exited before `/health` returned 2xx.
+    /// The `chottu serve` child exited before `/health` returned 2xx.
     EarlyExit { code: Option<i32>, stderr: String },
     /// Deadline elapsed without ever seeing 2xx or an early exit.
     Timeout,
 }
 
-/// Spawn a detached task that continuously drains `Chottu serve`'s
+/// Spawn a detached task that continuously drains `chottu serve`'s
 /// stderr into a rolling tail buffer.
 ///
-/// We MUST keep reading stderr for as long as the child runs — `Chottu
+/// We MUST keep reading stderr for as long as the child runs — `chottu
 /// serve` is chatty (engine load progress, request logs), and the OS
 /// pipe buffer is small (4 KB on Windows, 64 KB on Linux). Once full,
 /// the child's next stderr write blocks indefinitely and the server
@@ -511,7 +511,7 @@ enum ChottuStartResult {
 ///
 /// Returns immediately after spawning the task; the task ends naturally
 /// when the child closes stderr (i.e. exits).
-fn spawn_Chottu_stderr_drainer(mut stderr: tokio::process::ChildStderr, tail: StderrTail) {
+fn spawn_chottu_stderr_drainer(mut stderr: tokio::process::ChildStderr, tail: StderrTail) {
     use tokio::io::AsyncReadExt;
     tokio::spawn(async move {
         let mut buf = vec![0u8; 4096];
@@ -536,15 +536,15 @@ fn spawn_Chottu_stderr_drainer(mut stderr: tokio::process::ChildStderr, tail: St
 ///
 /// Safe to call at any time; returns an empty string before the
 /// drainer has seen any bytes. Trimmed.
-async fn read_Chottu_stderr_tail(backend: &SharedBackend) -> String {
-    let tail = backend.lock().await.Chottu_stderr_tail.clone();
+async fn read_chottu_stderr_tail(backend: &SharedBackend) -> String {
+    let tail = backend.lock().await.chottu_stderr_tail.clone();
     let bytes = tail.lock().await.clone();
     String::from_utf8_lossy(&bytes).trim().to_string()
 }
 
-/// Poll `Chottu serve` health, watching the child process state so we
+/// Poll `chottu serve` health, watching the child process state so we
 /// never wait 10 minutes for a process that crashed in the first second.
-async fn wait_for_Chottu_health(
+async fn wait_for_chottu_health(
     url: &str,
     timeout: Duration,
     backend: &SharedBackend,
@@ -564,13 +564,13 @@ async fn wait_for_Chottu_health(
         // the full HTTP timeout window.
         let exit_status = {
             let mut mgr = backend.lock().await;
-            match mgr.Chottu.as_mut() {
+            match mgr.chottu.as_mut() {
                 Some(h) => h.child.try_wait().ok().flatten(),
                 None => None,
             }
         };
         if let Some(status) = exit_status {
-            let stderr = read_Chottu_stderr_tail(backend).await;
+            let stderr = read_chottu_stderr_tail(backend).await;
             return ChottuStartResult::EarlyExit {
                 code: status.code(),
                 stderr,
@@ -837,8 +837,8 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             ));
             return;
         }
-        // Point `Chottu serve` at the user's endpoint by writing the engine
-        // host into ~/.Chottu/config.toml (the env var alone is shadowed by
+        // Point `chottu serve` at the user's endpoint by writing the engine
+        // host into ~/.chottu/config.toml (the env var alone is shadowed by
         // the engine's non-empty default host in the Python layer).
         if let Some((engine, host)) = &plan.engine_host {
             if let Err(e) = set_engine_host_in_config(engine, host) {
@@ -919,7 +919,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             let mut s = status.lock().await;
             s.error = Some(format!(
                 "{} exists but is not a valid Chottu project. \
-                 Remove it and relaunch, or set Chottu_ROOT to the correct path.",
+                 Remove it and relaunch, or set CHOTTU_ROOT to the correct path.",
                 clone_target,
             ));
             return;
@@ -930,12 +930,13 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             s.detail = "Downloading Chottu (first launch)...".into();
         }
 
+        // FIXED: Using your GitHub repository URL
         let clone_result = tokio::process::Command::new(&git_bin)
             .args([
                 "clone",
                 "--depth",
                 "1",
-                "https://github.com/Chottu/Chottu.git",
+                "https://github.com/ayushmahesh477-stack/Chottu-Version-2.0.git",
                 &clone_target,
             ])
             .stdout(std::process::Stdio::null())
@@ -952,7 +953,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
                     let mut s = status.lock().await;
                     s.error = Some(format!(
                         "Failed to download Chottu: {}. \
-                         Clone manually: git clone https://github.com/Chottu/Chottu.git {}",
+                         Clone manually: git clone https://github.com/ayushmahesh477-stack/Chottu-Version-2.0.git {}",
                         stderr.trim(),
                         clone_target,
                     ));
@@ -962,7 +963,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
                     let mut s = status.lock().await;
                     s.error = Some(format!(
                         "Failed to download Chottu: {}. \
-                         Clone manually: git clone https://github.com/Chottu/Chottu.git {}",
+                         Clone manually: git clone https://github.com/ayushmahesh477-stack/Chottu-Version-2.0.git {}",
                         e, clone_target,
                     ));
                     return;
@@ -987,7 +988,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             .build()
             .unwrap();
         if client
-            .get(format!("http://127.0.0.1:{}/health", Chottu_PORT))
+            .get(format!("http://127.0.0.1:{}/health", CHOTTU_PORT))
             .send()
             .await
             .is_ok()
@@ -996,7 +997,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             #[cfg(unix)]
             {
                 let _ = tokio::process::Command::new("fuser")
-                    .args(["-k", &format!("{}/tcp", Chottu_PORT)])
+                    .args(["-k", &format!("{}/tcp", CHOTTU_PORT)])
                     .output()
                     .await;
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1007,7 +1008,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
                 if let Ok(output) = tokio::process::Command::new("cmd")
                     .args(["/C", &format!(
                         "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :{port} ^| findstr LISTENING') do taskkill /PID %a /F",
-                        port = Chottu_PORT,
+                        port = CHOTTU_PORT,
                     )])
                     .output()
                     .await
@@ -1026,7 +1027,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
     // Previously we ran `uv sync` with both stdout AND stderr piped to
     // /dev/null and discarded the exit code (`let _ = …`). When `uv sync`
     // failed — Windows path issues, network problems, lockfile conflicts —
-    // the user saw no error, the boot continued, `uv run Chottu serve`
+    // the user saw no error, the boot continued, `uv run chottu serve`
     // then ran in an under-provisioned venv, and the user waited the full
     // 600s health-check window before getting "Chottu server did not
     // become healthy in time" with no actionable detail (issue #331).
@@ -1074,10 +1075,10 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
     let mut cmd = tokio::process::Command::new(&uv_bin);
     let mut serve_argv: Vec<String> = vec![
         "run".into(),
-        "Chottu".into(),
+        "chottu".into(),
         "serve".into(),
         "--port".into(),
-        Chottu_PORT.to_string(),
+        CHOTTU_PORT.to_string(),
     ];
     serve_argv.extend(plan.serve_args.iter().cloned());
     // If the Ollama pull fell back to a different tag than planned, serve the
@@ -1098,13 +1099,13 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         .stderr(std::process::Stdio::piped())
         .current_dir(root);
 
-    // Inject cloud API keys from ~/.Chottu/cloud-keys.env
+    // Inject cloud API keys from ~/.chottu/cloud-keys.env
     for (key, value) in read_cloud_keys() {
         cmd.env(&key, &value);
     }
-    let Chottu_child = cmd.spawn();
+    let chottu_child = cmd.spawn();
 
-    match Chottu_child {
+    match chottu_child {
         Ok(mut child) => {
             // Start draining stderr immediately. If we wait until the
             // health check returns we risk filling the 4 KB Windows pipe
@@ -1112,11 +1113,11 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             // it can bind its HTTP port — exactly the symptom in #309.
             let stderr_handle = child.stderr.take();
             let mut mgr = backend.lock().await;
-            let tail = mgr.Chottu_stderr_tail.clone();
-            mgr.Chottu = Some(ChildHandle { child });
+            let tail = mgr.chottu_stderr_tail.clone();
+            mgr.chottu = Some(ChildHandle { child });
             drop(mgr);
             if let Some(stderr) = stderr_handle {
-                spawn_Chottu_stderr_drainer(stderr, tail);
+                spawn_chottu_stderr_drainer(stderr, tail);
             }
         }
         Err(e) => {
@@ -1131,18 +1132,18 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         }
     }
 
-    let server_url = format!("http://127.0.0.1:{}/health", Chottu_PORT);
-    match wait_for_Chottu_health(&server_url, Duration::from_secs(600), &backend).await {
+    let server_url = format!("http://127.0.0.1:{}/health", CHOTTU_PORT);
+    match wait_for_chottu_health(&server_url, Duration::from_secs(600), &backend).await {
         ChottuStartResult::Ready => {}
         ChottuStartResult::ServiceUnavailable(body) => {
             let mut s = status.lock().await;
             s.error = Some(format!(
                 "Chottu server is running but the inference engine is not available \
                  (HTTP 503). This usually means the configured model couldn't be loaded.\n\n\
-                 Check the server logs, or run 'uv run Chottu serve --port {}{}' \
+                 Check the server logs, or run 'uv run chottu serve --port {}{}' \
                  from {} to see the engine error.\n\n\
                  Server response:\n{}",
-                Chottu_PORT,
+                CHOTTU_PORT,
                 // Show the args actually passed (after `serve --port <port>`),
                 // including any post-fallback `--model` override.
                 match serve_argv.get(5..) {
@@ -1183,7 +1184,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             return;
         }
         ChottuStartResult::Timeout => {
-            let stderr = read_Chottu_stderr_tail(&backend).await;
+            let stderr = read_chottu_stderr_tail(&backend).await;
             let mut s = status.lock().await;
             s.error = Some(if stderr.is_empty() {
                 format!(
@@ -1226,7 +1227,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
 // ---------------------------------------------------------------------------
 
 fn api_base() -> String {
-    format!("http://127.0.0.1:{}", Chottu_PORT)
+    format!("http://127.0.0.1:{}", CHOTTU_PORT)
 }
 
 #[tauri::command]
@@ -1433,8 +1434,8 @@ async fn fetch_models(api_url: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-async fn run_Chottu_command(args: Vec<String>) -> Result<String, String> {
-    let mut cmd_args = vec!["run".to_string(), "Chottu".to_string()];
+async fn run_chottu_command(args: Vec<String>) -> Result<String, String> {
+    let mut cmd_args = vec!["run".to_string(), "chottu".to_string()];
     cmd_args.extend(args);
     let uv_bin = resolve_bin("uv");
     let output = tokio::process::Command::new(&uv_bin)
@@ -1526,11 +1527,11 @@ async fn submit_savings(
 // Cloud API key management
 // ---------------------------------------------------------------------------
 
-/// Path to the cloud keys file (~/.Chottu/cloud-keys.env).
+/// Path to the cloud keys file (~/.chottu/cloud-keys.env).
 fn cloud_keys_path() -> std::path::PathBuf {
     let home = home_dir();
     std::path::PathBuf::from(home)
-        .join(".Chottu")
+        .join(".chottu")
         .join("cloud-keys.env")
 }
 
@@ -1587,7 +1588,7 @@ async fn save_cloud_key(key_name: String, key_value: String) -> Result<(), Strin
 
     // Tell the running server to hot-reload its cloud engine so the user
     // doesn't need to restart the app after entering an API key.
-    let reload_url = format!("http://127.0.0.1:{}/v1/cloud/reload", Chottu_PORT);
+    let reload_url = format!("http://127.0.0.1:{}/v1/cloud/reload", CHOTTU_PORT);
     let _ = reqwest::Client::new()
         .post(&reload_url)
         .timeout(std::time::Duration::from_secs(10))
@@ -1690,7 +1691,7 @@ async fn delete_ollama_model(model_name: String) -> Result<serde_json::Value, St
 }
 
 // ---------------------------------------------------------------------------
-// Inference-source selection (~/.Chottu/inference.json)
+// Inference-source selection (~/.chottu/inference.json)
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1720,10 +1721,10 @@ struct InferenceConfig {
     engine: Option<String>,
 }
 
-/// Path to the inference-source config (~/.Chottu/inference.json).
+/// Path to the inference-source config (~/.chottu/inference.json).
 fn inference_config_path() -> std::path::PathBuf {
     std::path::PathBuf::from(home_dir())
-        .join(".Chottu")
+        .join(".chottu")
         .join("inference.json")
 }
 
@@ -1761,13 +1762,13 @@ fn upsert_engine_host(existing: &str, engine: &str, host: &str) -> Result<String
     Ok(doc.to_string())
 }
 
-/// Write the custom-endpoint host into ~/.Chottu/config.toml so
-/// `Chottu serve` (which reads that file via load_config) points at it.
+/// Write the custom-endpoint host into ~/.chottu/config.toml so
+/// `chottu serve` (which reads that file via load_config) points at it.
 /// The `<ENGINE>_HOST` env var is unreliable — it is shadowed by the engine's
 /// non-empty default host in the Python layer — so config.toml is the override.
 fn set_engine_host_in_config(engine: &str, host: &str) -> Result<(), String> {
     let path = std::path::PathBuf::from(home_dir())
-        .join(".Chottu")
+        .join(".chottu")
         .join("config.toml");
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -1856,7 +1857,7 @@ mod native_overlay {
 
     fn conversation_path() -> std::path::PathBuf {
         std::path::PathBuf::from(super::home_dir())
-            .join(".Chottu")
+            .join(".chottu")
             .join("overlay-conversation.json")
     }
 
@@ -2258,7 +2259,7 @@ pub fn run() {
             // Create native macOS overlay panel
             #[cfg(target_os = "macos")]
             unsafe {
-                native_overlay::create(include_str!("overlay.html"), Chottu_PORT);
+                native_overlay::create(include_str!("overlay.html"), CHOTTU_PORT);
             }
 
             // Register Cmd+Shift+Space to toggle the overlay
@@ -2300,7 +2301,7 @@ pub fn run() {
             search_memory,
             fetch_agents,
             fetch_models,
-            run_Chottu_command,
+            run_chottu_command,
             fetch_savings,
             submit_savings,
             transcribe_audio,
@@ -2373,12 +2374,12 @@ mod tests {
     #[test]
     fn failure_message_includes_exit_code_and_tail_and_hint() {
         let msg = format_uv_sync_failure(
-            Path::new("/home/u/.Chottu/src"),
+            Path::new("/home/u/.chottu/src"),
             Some(2),
             "error: failed to resolve numpy==2.1.3",
         );
         assert!(msg.contains("exit 2"));
-        assert!(msg.contains("/home/u/.Chottu/src"));
+        assert!(msg.contains("/home/u/.chottu/src"));
         assert!(msg.contains("failed to resolve numpy==2.1.3"));
         assert!(msg.contains("uv sync --extra server")); // actionable next step
     }
